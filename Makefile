@@ -1,20 +1,24 @@
 SHELL := /bin/bash
 
-.PHONY: check format typecheck test migrate run
+.PHONY: back-lint back-format back-typecheck back-test back-migrate \
+        front-lint front-typecheck front-build \
+        setup run
 
-check:
-	uv run ruff check --force-exclude --fix --exit-non-zero-on-fix
+# ── Backend ──────────────────────────────────────────────
 
-format:
-	uv run ruff format --force-exclude --exit-non-zero-on-format
+back-lint:
+	cd backend && uv run ruff check --force-exclude --fix --exit-non-zero-on-fix
 
-typecheck:
+back-format:
+	cd backend && uv run ruff format --force-exclude --exit-non-zero-on-format
+
+back-typecheck:
 	cd backend && uv run ty check .
 
-test:
+back-test:
 	cd backend && uv run pytest tests/
 
-migrate:
+back-migrate:
 	@set -euo pipefail; \
 	backup=$$(mktemp /tmp/env.bak.XXXXXX); \
 	if [ -f .env ]; then cp .env $$backup; fi; \
@@ -22,6 +26,26 @@ migrate:
 	sed -i 's/^POSTGRES_HOST=.*/POSTGRES_HOST=localhost/' .env; \
 	trap 'if [ -f $$backup ]; then cp $$backup .env; rm -f $$backup; fi' EXIT; \
 	cd ./backend && alembic revision --autogenerate -m "$${MSG:-autogen}"
+
+# ── Frontend ─────────────────────────────────────────────
+
+front-lint:
+	cd frontend && npm run lint
+
+front-typecheck:
+	cd frontend && npx tsc -b
+
+front-build:
+	cd frontend && npm run build
+
+# ── Common ───────────────────────────────────────────────
+
+setup:
+	command -v uv >/dev/null || pip install uv
+	command -v pre-commit >/dev/null || pip install pre-commit
+	cd backend && uv sync
+	cd frontend && npm install
+	pre-commit install
 
 run:
 	cp .env.example .env && docker compose up --build

@@ -1,8 +1,6 @@
 """LLM provider API tests."""
 
-import secrets
 import uuid
-from http import HTTPStatus
 
 import pytest
 
@@ -23,9 +21,8 @@ class TestLLMProviderCreate(BaseTestCase):
         payload = {
             "name": f"provider-{uuid.uuid4().hex[:8]}",
             "type": LLMProviderType.OLLAMA,
-            "api_key": secrets.token_urlsafe(18),
             "base_url": "https://example.com",
-            "is_default": True,
+            "config": {"timeout": 5},
         }
 
         response = await self.client.post(url=self.url, json=payload, headers=headers)
@@ -33,7 +30,7 @@ class TestLLMProviderCreate(BaseTestCase):
         data = await self.assert_response_dict(response=response)
         self.assert_has_keys(
             data,
-            {"id", "user_id", "name", "type", "base_url", "is_default"},
+            {"id", "user_id", "name", "type", "base_url"},
         )
         if data["name"] != payload["name"]:
             pytest.fail("Provider name did not match request")
@@ -41,8 +38,8 @@ class TestLLMProviderCreate(BaseTestCase):
             pytest.fail("Provider type did not match request")
         if data["user_id"] != user["id"]:
             pytest.fail("Provider user_id did not match current user")
-        if "api_key" in data:
-            pytest.fail("Provider response must not include api_key")
+        if data["config"] != payload["config"]:
+            pytest.fail("Provider config did not match request")
 
 
 class TestLLMProviderList(BaseTestCase):
@@ -76,29 +73,6 @@ class TestLLMProviderList(BaseTestCase):
             pytest.fail("Unexpected provider from another user in list")
 
 
-class TestLLMProviderGet(BaseTestCase):
-    """Tests for GET /llm-providers/{provider_id}."""
-
-    url = "/llm-providers"
-
-    @pytest.mark.asyncio
-    async def test_ok(self) -> None:
-        """Successful request returns provider data."""
-        user, headers = await self.create_user_and_get_token()
-        provider = await LLMProviderFactory.create_async(
-            session=self.session, user_id=user["id"]
-        )
-
-        response = await self.client.get(
-            url=f"{self.url}/{provider.id}",
-            headers=headers,
-        )
-
-        data = await self.assert_response_dict(response=response)
-        if data["id"] != provider.id:
-            pytest.fail("Provider id did not match")
-
-
 class TestLLMProviderUpdate(BaseTestCase):
     """Tests for PATCH /llm-providers/{provider_id}."""
 
@@ -115,15 +89,13 @@ class TestLLMProviderUpdate(BaseTestCase):
 
         response = await self.client.patch(
             url=f"{self.url}/{provider.id}",
-            json={"name": new_name, "is_default": True},
+            json={"name": new_name},
             headers=headers,
         )
 
         data = await self.assert_response_dict(response=response)
         if data["name"] != new_name:
             pytest.fail("Provider name was not updated")
-        if data["is_default"] is not True:
-            pytest.fail("Provider is_default was not updated")
 
 
 class TestLLMProviderDelete(BaseTestCase):
@@ -147,8 +119,10 @@ class TestLLMProviderDelete(BaseTestCase):
         await self.assert_response_ok(response=response)
 
         fetch = await self.client.get(
-            url=f"{self.url}/{provider.id}",
+            url=self.url,
             headers=headers,
         )
-        if fetch.status_code != HTTPStatus.NOT_FOUND:
-            pytest.fail("Expected deleted provider to return 404")
+        data = await self.assert_response_list(response=fetch)
+        ids = {item.get("id") for item in data}
+        if provider.id in ids:
+            pytest.fail("Expected deleted provider to not appear in list")

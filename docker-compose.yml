@@ -9,7 +9,7 @@ x-prefect: &prefect
     redis:
       condition: service_healthy
 
-x-app: &app
+x-backend: &backend
   build:
     context: ./backend
   restart: always
@@ -26,11 +26,22 @@ x-app: &app
       condition: service_healthy
 
 services:
-  api:
-    <<: *app
+  frontend:
+    build:
+      context: ./frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+
+  backend:
+    <<: *backend
     ports:
       - "5000:5000"
-    command: [ "bash", "/docker-entrypoint.sh", "gunicorn", "main:app" ]
+    command: [ "sh", "/docker-entrypoint.sh", "gunicorn", "main:app" ]
 
   postgres:
     image: ${POSTGRES_IMAGE}
@@ -87,6 +98,28 @@ services:
     volumes:
       - chroma_data:/data
 
+  ollama:
+    image: ${OLLAMA_IMAGE}
+    restart: always
+    entrypoint: [ "/bin/sh", "/docker-entrypoint.sh" ]
+    environment:
+      ENTRYPOINT_MODE: ollama
+      OLLAMA_BOOT_MODEL: qwen2.5:1.5b
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./backend/entrypoint.sh:/docker-entrypoint.sh:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "curl"
+        - "-f"
+        - "http://localhost:11434/"
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
   prefect-server:
     <<: *prefect
     ports:
@@ -114,7 +147,7 @@ services:
     command: [ "prefect", "server", "services", "start" ]
 
   prefect-worker:
-    <<: *app
+    <<: *backend
     command: [ "prefect", "worker", "start", "--pool", "local-pool" ]
     deploy:
       replicas: 1
@@ -124,3 +157,4 @@ volumes:
   prefect_data:
   chroma_data:
   redis_data:
+  ollama_data:

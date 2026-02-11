@@ -1,10 +1,13 @@
 """LLM provider use case implementation."""
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from exceptions import LLMProviderNotFoundError
+from exceptions import LLMProviderConnectionError, LLMProviderNotFoundError
+from integrations import LLMClientFactory
 from models import LLMProvider
-from repositories import LLMProviderRepository, UserRepository
+from repositories import LLMProviderRepository
+from schemas import LLMModel
 
 
 class LLMProviderUsecase:
@@ -13,7 +16,7 @@ class LLMProviderUsecase:
     def __init__(self) -> None:
         """Initialize the usecase."""
         self._llm_provider_repository = LLMProviderRepository()
-        self._user_repository = UserRepository()
+        self._llm_client_factory = LLMClientFactory()
 
     async def create_llm_provider(
         self,
@@ -30,9 +33,6 @@ class LLMProviderUsecase:
 
         Returns:
             The created LLM provider.
-
-        Raises:
-            UserNotFoundError: If the owner user is not found.
 
         """
         return await self._llm_provider_repository.create(
@@ -72,6 +72,7 @@ class LLMProviderUsecase:
 
         Raises:
             LLMProviderNotFoundError: If the LLM provider is not found.
+            LLMProviderConfigError: If the provider configuration is invalid.
 
         """
         provider = await self._llm_provider_repository.get_by(
@@ -105,6 +106,7 @@ class LLMProviderUsecase:
         )
 
         update_data = {k: v for k, v in kwargs.items() if v is not None}
+
         if not update_data:
             return provider
 
@@ -135,3 +137,43 @@ class LLMProviderUsecase:
         )
         if not deleted:
             raise LLMProviderNotFoundError
+
+    async def get_models(
+        self, session: AsyncSession, provider_id: int, user_id: int
+    ) -> list[LLMModel]:
+        """Fetch available models from an LLM provider.
+
+        Args:
+            session: The session.
+            provider_id: The provider ID.
+            user_id: The owner user ID.
+
+        Returns:
+            A list of model metadata.
+
+        Raises:
+            LLMProviderNotFoundError: If the provider is not found.
+            LLMProviderConnectionError: If the provider is unreachable.
+            UnsupportedLLMProviderError: If the provider type is unsupported.
+
+        """
+        llm_provider = await self.get_llm_provider(
+            session=session, provider_id=provider_id, user_id=user_id
+        )
+
+        try:
+            return await self._llm_client_factory.get_client(
+                llm_provider=llm_provider
+            ).list_models()
+        except httpx.TimeoutException as exc:
+            raise LLMProviderConnectionError(
+                message="LLM provider request timed out while listing models"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip()
+            message = f"LLM provider returned {exc.response.status_code}"
+            if detail:
+                message = f"{message}: {detail[:300]}"
+            raise LLMProviderConnectionError(message=message) from exc
+        except httpx.HTTPError as exc:
+            raise LLMProviderConnectionError from exc
